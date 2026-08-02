@@ -12,9 +12,9 @@
 -- Scale (live anchors from the clone): trusted source = ~860,000; bans = -999,999;
 -- ceiling = 1,000,000; floor = 20,000. Design principle: WEB-DL is a group-independent
 -- stream and stays the preferred small-file default (860k). A Bluray is a re-encode
--- (generally larger), so ALL Blurays are demoted to fallbacks below WEB-DL: an unknown
--- Bluray gets a small floor-clearing weight, and trusted Bluray groups get only a small
--- nudge above that (not the ~860k eligibility they had in Balanced).
+-- (generally larger), so Blurays sit below WEB-DL: an unknown-group Bluray gets only a
+-- small floor-clearing fallback weight, while KNOWN/trusted Bluray groups get a real
+-- middle-tier bump (well above unknown, still below WEB-DL so WEB-DL stays the default).
 
 -- --- BEGIN op 12553 ( update quality_profile "1080p Main" )
 -- Profile level: real floor/ceiling (the clone reset them to 0/0), and make the profile
@@ -60,14 +60,14 @@ DELETE FROM quality_profile_custom_formats WHERE quality_profile_name = '1080p M
 -- --- BEGIN op 12556 ( update quality_profile "1080p Main" )
 -- HDR as a nice bonus, and the DV-fallback rule (all profiles): a DV release WITHOUT an
 -- HDR base layer is excluded; DV WITH fallback nets positive (matches only "Dolby Vision").
-DELETE FROM quality_profile_custom_formats WHERE quality_profile_name = '1080p Main' AND custom_format_name IN ('Dolby Vision','Dolby Vision (Without Fallback)','HDR','HDR10','HDR10+','HLG','PQ');
+-- NOTE: op 127 deleted the standalone HDR10/HLG/PQ custom formats and folded them into the
+-- generalized "HDR" CF (now matches HDR/HDR10/HLG/PQ); "HDR10+" stays separate.
+DELETE FROM quality_profile_custom_formats WHERE quality_profile_name = '1080p Main' AND custom_format_name IN ('Dolby Vision','Dolby Vision (Without Fallback)','HDR','HDR10+');
 INSERT INTO quality_profile_custom_formats (quality_profile_name, custom_format_name, arr_type, score) VALUES
   ('1080p Main', 'Dolby Vision (Without Fallback)', 'all', -999999),
   ('1080p Main', 'Dolby Vision', 'all', 800),
   ('1080p Main', 'HDR10+', 'all', 600),
-  ('1080p Main', 'HDR10', 'all', 500),
   ('1080p Main', 'HDR', 'all', 300);
--- HLG / PQ intentionally left neutral (0) via the delete above.
 -- --- END op 12556
 
 -- --- BEGIN op 12557 ( update quality_profile "1080p Main" )
@@ -94,15 +94,15 @@ INSERT INTO quality_profile_custom_formats (quality_profile_name, custom_format_
 -- --- END op 12557
 
 -- --- BEGIN op 12558 ( update quality_profile "1080p Main" )
--- Keep the small-file philosophy: WEB-DL stays the preferred default, so demote the Bluray
--- group tiers from their Balanced eligibility (~861k/860k) to a small preference nudge.
--- Trusted Bluray now = 40,000 fallback + 120/100 nudge -- still well below any WEB-DL, but
--- ranked above an unknown-group Bluray. (The Fall is grabbable; nothing prefers the bigger
--- Bluray over a lean WEB-DL.)
+-- Reward KNOWN Bluray groups: bump the trusted Bluray tiers to a real middle tier. These
+-- stack on the 40,000 unknown-Bluray eligibility, so a trusted Bluray totals ~300k/280k --
+-- clearly better than an unknown Bluray (40k), still below any WEB-DL (860k) so WEB-DL
+-- stays the small-file default. (Down from Balanced's ~861k/860k, which had made trusted
+-- Blurays first-class and outrank WEB-DL.)
 DELETE FROM quality_profile_custom_formats WHERE quality_profile_name = '1080p Main' AND custom_format_name IN ('1080p Balanced Tier 1','1080p Balanced Tier 2');
 INSERT INTO quality_profile_custom_formats (quality_profile_name, custom_format_name, arr_type, score) VALUES
-  ('1080p Main', '1080p Balanced Tier 1', 'all', 120),
-  ('1080p Main', '1080p Balanced Tier 2', 'all', 100);
+  ('1080p Main', '1080p Balanced Tier 1', 'all', 260000),
+  ('1080p Main', '1080p Balanced Tier 2', 'all', 240000);
 -- --- END op 12558
 
 -- --- BEGIN op 12559 ( delete custom_format "zz Round Trip Test" )
