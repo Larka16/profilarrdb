@@ -1,0 +1,106 @@
+# Profilarr Custom Profile Project — Handoff (v3, reflects the built suite)
+
+Context for an agent (or future me) picking this up. The custom quality-profile suite is
+**built**. This note reflects the final reality; companion docs: `CustomProfile.md` (scoring
+reference, per-profile tables) and `README.md` (repo overview). All three live in `Ignore/`
+(git-ignored).
+
+---
+
+## Repo (verified)
+
+- `origin` = `github.com/Larka16/profilarrdb.git`, a GitHub fork of `Dictionarry-Hub/database`.
+- Branch **`v2`**. It's a **PCD 2.0** database: `pcd.json` (manifest) + `ops/*.sql` (sequential
+  SQL migrations, replayed in order by Profilarr). Not YAML.
+- Authoring surface: Profilarr UI exports `ops/N.*.sql` batches (`-- @operation: export`,
+  `@opIds`). We also **hand-author ops** and they apply cleanly (confirmed).
+- Profilarr instance is linked to this fork and was idle throughout the build (safe to test).
+
+### Data model (per profile: 5 tables)
+- `quality_profiles` (floor = `minimum_custom_format_score`, ceiling = `upgrade_until_score`)
+- `quality_groups` + `quality_group_members` + `quality_profile_qualities` (the resolution
+  hierarchy, membership, ordering, enabled flag, cutoff `upgrade_until`)
+- `quality_profile_custom_formats(quality_profile_name, custom_format_name, arr_type, score)`
+  — the scoring table (arr_type is `all` / `radarr` / `sonarr`).
+
+---
+
+## The workflow that worked (use this going forward)
+
+**Split: hierarchy in the UI, scoring in SQL.**
+- **Hierarchy** (which qualities enabled, order, cutoff) → do in the **Profilarr UI**. Doing it
+  in hand-authored SQL is drift-prone: positions get rewritten by later UI edits, and my
+  position assumptions go stale (guarded UPDATEs silently no-op). The UI enforces invariants.
+- **Scoring** (`quality_profile_custom_formats`) → **hand-authored SQL ops**, robust because
+  it's keyed by CF name (DELETE by name + INSERT), independent of positions.
+
+**Build recipe per profile:** duplicate a base in the UI (the *Duplicate* action copies
+scores; *New Profile* does NOT — it came in empty once), set the hierarchy in the UI, push;
+then I read the export for the **live** anchors and write the scoring transform as an op.
+
+### Hard-won lessons
+- **Read live values from a fresh clone export, NOT `0.rosettarr.sql`.** The initial import is
+  stale; 200+ later ops rescaled everything (e.g. 1080p WEB-DL is 860k live, not the import's
+  280k). The clone export is the source of truth.
+- **Verify a CF exists before referencing it** or the op fails `FOREIGN KEY constraint failed`.
+  Deleted/renamed CFs are listed in `CustomProfile.md` (e.g. `HDR10`/`HLG`/`PQ` folded into
+  `HDR`; `2160p Bluray` gone → use `UHD Bluray`).
+- **opIds:** Profilarr assigns its own (currently low ~3200 range) on UI exports. Hand-authored
+  ops use **12552+** (well above) to avoid collision. Each hand-authored op has worked.
+- **`Duplicate` sets the source profile's floor** (2160p base came in at 200,000); reset
+  floor/ceiling explicitly in the transform.
+- **Sources & group tiers are stored per-arr (`radarr`+`sonarr`); audio/HDR/bans/WEB-DL tiers
+  are `all`.** When overwriting, DELETE by (profile, cf) [all arr rows] then INSERT `all`.
+
+---
+
+## The suite (built — 6 profiles)
+
+All share: either codec incl. AV1 (un-banned), Remux/Full Disc banned except where noted,
+`Banned Groups` kept (the upstream-synced junk list), and the **DV rule** (all profiles):
+`Dolby Vision (Without Fallback)` excluded, `Dolby Vision` with fallback wanted, HDR a bonus.
+
+| Profile | Op | Shape |
+|---|---|---|
+| **1080p Main** | 213 | 1080p-only. WEB-DL 860k (small-file default) > trusted Bluray ~300k > unknown Bluray 40k > WEBRip 25k. Floor 20k. |
+| **2160p Main** | 217 | 2160p-only. 2160p WEB-DL 920k > trusted UHD Bluray ~300k > unknown UHD Bluray 40k. SDR allowed (0), HDR bonus. Floor 20k. |
+| **2160p Preferred** | 221 | 2160p high / 1080p fallback. 2160p WEB-DL 920k, trusted UHD BR ~490k; 1080p WEB-DL 400k ("great 1080p") beats unknown 4K BR 40k ("crappy 4K"). No WEBRip. Floor 20k. |
+| **1080p Preferred** | 224 | Mirror: 1080p high (860k) / 2160p fallback (400k). Great 4K beats crappy 1080p. No WEBRip. Floor 20k. |
+| **Archive** | 226 | Remux-first, 8-tier: trusted 2160p Remux 980k > trusted UHD BR 850k > any 2160p Remux 800k > any UHD BR 750k > trusted 1080p Remux 430k > trusted 1080p BR 400k > any 1080p Remux 250k > any 1080p BR 200k. **Floor 150k** (rejects WEB-DL/junk). WEB-DL weights dropped as belt-and-suspenders. |
+| **Any** | 228 | Permissive catch-all. Strict resolution ladder (2160p 920-960k > 1080p 680-760k > 720p 500-560k > 480/576 340-380k > DVD 200k > SDTV 100k), group tiers flattened, all bans lifted except guardrails. **Floor 1.** |
+
+**Audio / channel / vendor model (op 229, all profiles):** channel CFs `7.1 Surround` (+3000)
+and `5.1 Surround` (+2000) were created (from the existing 5.1/7.1 regex) and dominate; codec
+ladder (lossless ~800–1600 → lossy ~100–600) is secondary; streaming vendors (`AMZN`/`DSNP`/
+`ATVP`/`HMAX`/`MAX`/`iT`/`NF`/`MA`) dropped to a flat **50** tiebreaker. Priority within a
+source: **channels ≫ lossless codec > vendor**. (Audio scores are all far below source
+weights, so audio never overrides resolution.) Note: audio CFs are otherwise codec-based — a
+codec CF can't tell 5.1 from 2.0, which is why the channel CFs were needed.
+
+---
+
+## Stock-profile cleanup (done, mostly)
+
+Deleted the unused Dictionarry profiles: `720p Quality`, `1080p Compact/Efficient/Quality/
+Quality HDR/Remux`, `2160p Efficient/Quality/Remux`. **`1080p Balanced` and `2160p Balanced`
+remain** (they were the clone bases). Optional: delete those two now that the suite is built.
+
+> Note: the Remux profiles were deleted, so Archive was built on `2160p Balanced` (the Remux
+> *custom formats* still exist).
+
+---
+
+## Remaining / optional
+
+1. **Validate in simulation** the profiles not yet sim-confirmed and the op 229 audio change
+   (Disney 5.1 vs Amazon 2.0).
+2. Optionally delete `1080p Balanced` + `2160p Balanced`.
+3. **Upstream sync** still to be set up (`syncupstream.yml`, not yet installed): merge
+   `Dictionarry-Hub/database` for group-tier/regex/ban updates. Open question: reconciling
+   upstream's op stream with our hand-authored ops (numbering/opId). Test a real merge first.
+4. Assign library items to the new profiles in Radarr/Sonarr (syncing a profile doesn't move
+   items onto it); re-verify floor/upgrade-until landed after sync (they've lagged before).
+
+## Working style the user expects
+Verify specifics from live data (not memory/stale import); simulate before syncing; never
+experiment on a live instance with users connected; explain the "why" and give honest tradeoffs.

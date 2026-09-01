@@ -1,0 +1,71 @@
+# .github/workflows/sync-upstream.yml   (GitHub fork: Larka16/profilarrdb)
+#
+# Merges upstream Dictionarry (Dictionarry-Hub/database) into this fork so the
+# release-group tiers, bans, and regex stay current, while preserving my own custom
+# quality-profile ops.
+#
+# Conservative by design: on ANY merge conflict it aborts and fails the run, so a bad
+# merge surfaces as a red X to review rather than a silently corrupted database.
+#
+# PCD 2.0 CAVEAT (verify before trusting this): the database is built by replaying
+# ops/*.sql in numeric order, and each op carries integer @opIds that Profilarr tracks.
+# Upstream keeps appending ops/210.*, 211.*, ... If my own custom-profile ops reuse those
+# numbers/opIds, a git merge may succeed textually but produce colliding or misordered
+# ops. Test a real merge of an upstream op stream on top of my ops before enabling the
+# schedule (see Ignore/Handoff). Keeping my changes as NEW profiles referencing upstream
+# CFs minimizes—but does not by itself guarantee—clean replay.
+#
+# Prereqs (GitHub Actions):
+#   - Move this file to .github/workflows/ to activate it.
+#   - Add `permissions: contents: write`; the built-in GITHUB_TOKEN suffices (no SYNC_TOKEN).
+#   - This fork's default branch is `v2` (upstream also has stable/dev). Confirm below.
+#   - `gh repo sync` won't work once the fork diverges — the merge workflow is correct.
+
+name: Sync upstream Dictionarry
+
+on:
+  workflow_dispatch: {}          # run manually first — trigger a few times, watch it
+  # schedule:                    # uncomment ONLY after manual runs succeed cleanly
+  #   - cron: '0 6 * * *'        # daily 06:00 UTC
+
+jobs:
+  merge-upstream:
+    runs-on: ubuntu-latest       # <-- set to your runner's label
+    steps:
+      - name: Checkout fork (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "forgejo-actions[bot]"
+          git config user.email "actions@noreply.local"
+
+      - name: Add upstream and fetch
+        run: |
+          git remote add upstream https://github.com/Dictionarry-Hub/database.git \
+            || git remote set-url upstream https://github.com/Dictionarry-Hub/database.git
+          git fetch upstream --prune
+
+      - name: Merge upstream (abort + fail on conflict)
+        run: |
+          set -euo pipefail
+          UPSTREAM_BRANCH="v2"          # <-- this fork tracks v2; confirm upstream's branch
+          if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            echo "Merge clean."
+          else
+            echo "::error::Merge conflict with upstream — aborting for manual review."
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Push if anything changed
+        run: |
+          if [ -n "$(git log origin/$(git rev-parse --abbrev-ref HEAD)..HEAD --oneline)" ]; then
+            git push origin HEAD
+            echo "Pushed upstream updates."
+          else
+            echo "Nothing to push — already up to date."
+          fi
